@@ -121,7 +121,11 @@ def inference_on_dataset(model, data_loader, evaluator):
                 total_compute_time = 0
 
             start_compute_time = time.perf_counter()
-            outputs = model(inputs)
+            try:
+                outputs = model(inputs)
+            except (AssertionError, RuntimeError) as e:
+                print(e)
+                continue
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             total_compute_time += time.perf_counter() - start_compute_time

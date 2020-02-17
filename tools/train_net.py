@@ -142,7 +142,17 @@ def main(args):
     consider writing your own training loop or subclassing the trainer.
     """
     trainer = Trainer(cfg)
-    trainer.resume_or_load(resume=args.resume)
+    try:
+        trainer.resume_or_load(resume=args.resume)
+        trainer.re_init_except_model(cfg)
+    except ValueError as e:
+        print(e)
+        trainer.re_init_except_model(cfg)
+        trainer.resume_or_load(resume=args.resume)
+        pass
+    # Reset mask head
+
+
     if cfg.TEST.AUG.ENABLED:
         trainer.register_hooks(
             [hooks.EvalHook(0, lambda: trainer.test_with_TTA(cfg, trainer.model))]

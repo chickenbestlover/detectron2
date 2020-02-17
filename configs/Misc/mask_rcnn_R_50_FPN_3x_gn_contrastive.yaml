@@ -1,0 +1,76 @@
+_BASE_: "../Base-RCNN-FPN.yaml"
+MODEL:
+  TRANSFER_FUNCTION: False
+  RESET_MASK: True
+  WEIGHTS: "catalog://ImageNetPretrained/FAIR/R-50-GN"
+  MASK_ON: True
+  RESNETS:
+    DEPTH: 50
+    NORM: "GN"
+    STRIDE_IN_1X1: False
+  ROI_HEADS:
+    CONTRASTIVE_LEARNING: True
+  FPN:
+    NORM: "GN"
+  ROI_BOX_HEAD:
+    NAME: "FastRCNNConvFCHead"
+    NUM_CONV: 4
+    NUM_FC: 1
+    NORM: "GN"
+  ROI_MASK_HEAD:
+    NORM: "GN"
+SOLVER:
+  # 1x schedule for 2GPUs (IMS_PER_BATCH=8)
+#  IMS_PER_BATCH: 4
+#  BASE_LR: 0.0005
+#  STEPS: (240000, 320000)
+#  MAX_ITER: 360000
+
+  # 1x schedule for 8GPUs (IMS_PER_BATCH=16)
+  #BASE_LR: 0.002
+  #STEPS: (60000, 80000)
+  #MAX_ITER: 90000
+
+
+  # 1x schedule for 4GPUs (IMS_PER_BATCH=8)\
+  IMS_PER_BATCH: 4
+  BASE_LR: 0.001
+  STEPS: (120000, 160000)
+  MAX_ITER: 180000
+
+
+  # 1x schedule for 2GPUs (IMS_PER_BATCH=4)
+  #BASE_LR: 0.0005
+  #STEPS: (240000, 320000)
+  #MAX_ITER: 360000
+
+
+  # 1x schedule for 1GPU (IMS_PER_BATCH=2)
+  #BASE_LR: 0.00025
+  #STEPS: (480000, 640000)
+  #MAX_ITER: 720000
+
+
+  # 3x schedule for 8GPUs (IMS_PER_BATCH=16)
+  #BASE_LR: 0.002
+  #STEPS: (210000, 250000)
+  #MAX_ITER: 270000
+
+
+  # 3x schedule for 4GPUs (IMS_PER_BATCH=8)
+  #BASE_LR: 0.001
+  #STEPS: (420000, 500000)
+  #MAX_ITER: 540000
+
+
+  # 3x schedule for 2GPUs (IMS_PER_BATCH=4)
+  #BASE_LR: 0.0005
+  #STEPS: (840000, 1000000)
+  #MAX_ITER: 1080000
+
+
+  # 3x schedule for 1GPUs (IMS_PER_BATCH=2)
+  #BASE_LR: 0.00025
+  #STEPS: (1680000, 2000000)
+  #MAX_ITER: 2160000
+

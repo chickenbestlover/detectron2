@@ -19,7 +19,7 @@ from ..sampling import subsample_labels
 from .box_head import build_box_head
 from .fast_rcnn import FastRCNNOutputLayers, FastRCNNOutputs
 from .keypoint_head import build_keypoint_head, keypoint_rcnn_inference, keypoint_rcnn_loss
-from .mask_head import build_mask_head, mask_rcnn_inference, mask_rcnn_loss
+from .mask_head import build_mask_head, mask_rcnn_inference, mask_rcnn_loss, mask_rcnn_inference_contrastive, prepare_gt_masks
 
 ROI_HEADS_REGISTRY = Registry("ROI_HEADS")
 ROI_HEADS_REGISTRY.__doc__ = """
@@ -467,9 +467,20 @@ class StandardROIHeads(ROIHeads):
 
     def __init__(self, cfg, input_shape):
         super(StandardROIHeads, self).__init__(cfg, input_shape)
+        self.contrastive = cfg.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING
+        self.finetune28x28 = cfg.MODEL.FINETUNE_28X28
+        self.evaluate_masking = cfg.MODEL.EVALUATE_MASKING
         self._init_box_head(cfg)
         self._init_mask_head(cfg)
         self._init_keypoint_head(cfg)
+        self.cfg = cfg
+        if cfg.MODEL.TRANSFER_FUNCTION:
+            self.transfer_function = nn.Sequential(
+                nn.Linear(5 * 1024, 1024),
+                nn.LeakyReLU(inplace=True),
+                nn.Linear(1024, 256),
+                nn.LeakyReLU(inplace=True)
+            )
 
     def _init_box_head(self, cfg):
         # fmt: off
@@ -493,6 +504,14 @@ class StandardROIHeads(ROIHeads):
             sampling_ratio=sampling_ratio,
             pooler_type=pooler_type,
         )
+
+        if self.contrastive or self.finetune28x28 or self.evaluate_masking:
+            self.box_pooler28x28 = ROIPooler(
+                output_size=(28,28),
+                scales=pooler_scales,
+                sampling_ratio=2*sampling_ratio,
+                pooler_type=pooler_type,
+            )
         # Here we split "box head" and "box predictor", which is mainly due to historical reasons.
         # They are used together so the "box predictor" layers should be part of the "box head".
         # New subclasses of ROIHeads do not need "box predictor"s.
@@ -567,14 +586,41 @@ class StandardROIHeads(ROIHeads):
             # Usually the original proposals used by the box head are used by the mask, keypoint
             # heads. But when `self.train_on_pred_boxes is True`, proposals will contain boxes
             # predicted by the box head.
-            losses.update(self._forward_mask(features_list, proposals))
+            #import pdb; pdb.set_trace()
+            if self.contrastive:
+                loss_mask, contrastive = self._forward_mask(features_list, proposals)
+                losses.update(loss_mask)
+                loss_triplet = self._forward_contrastive(features_list, contrastive[0])
+                losses.update(loss_triplet)
+            elif self.finetune28x28:
+                loss_mask, contrastive = self._forward_mask(features_list, proposals)
+                losses.update(loss_mask)
+                #import pdb; pdb.set_trace()
+                loss_fine28x28 = self._forward_box(features_list, contrastive[0],pool28x28=True)['loss_cls']
+                losses.update({'loss_fine28x28': loss_fine28x28})
+
+            else:
+                loss_mask = self._forward_mask(features_list, proposals)
+                losses.update(loss_mask)
+
             losses.update(self._forward_keypoint(features_list, proposals))
             return proposals, losses
         else:
-            pred_instances = self._forward_box(features_list, proposals)
+            pred_instances, keep_ind = self._forward_box(features_list, proposals, pool28x28=False)
             # During inference cascaded prediction is used: the mask and keypoints heads are only
             # applied to the top scoring box detections.
-            pred_instances = self.forward_with_given_boxes(features, pred_instances)
+
+            pred_instances = self.forward_with_given_boxes(features, pred_instances) # add mask
+
+            if self.evaluate_masking:
+
+                ''' start masking performance test'''
+                proposals = [p[k] for p,k in zip(proposals,keep_ind)]
+                for p1,p2 in zip(proposals,pred_instances): p1.set('pred_masks',p2.get('pred_masks'))
+                pred_instances, keep_ind = self._forward_box(features_list, proposals, pool28x28=True)
+                pred_instances = self.forward_with_given_boxes(features, pred_instances)  # add mask
+                ''' end masking performance test'''
+
             return pred_instances, {}
 
     def forward_with_given_boxes(self, features, instances):
@@ -598,12 +644,21 @@ class StandardROIHeads(ROIHeads):
         assert not self.training
         assert instances[0].has("pred_boxes") and instances[0].has("pred_classes")
         features = [features[f] for f in self.in_features]
-
+    # if self.contrastive:
+    #     #import pdb; pdb.set_trace()
+    #     instances, mask_logits, positive_inds, label_pos = self._forward_mask(features, instances)
+    #     contrastive = (mask_logits, positive_inds, label_pos)
+    #     for ins in instances: ins.proposal_boxes = ins.pred_boxes
+    #     instances = self._forward_box(features, instances, contrastive=contrastive)
+    #     instances = self._forward_keypoint(features, instances)
+    #     return instances
+    #
+    # else:
         instances = self._forward_mask(features, instances)
         instances = self._forward_keypoint(features, instances)
         return instances
 
-    def _forward_box(self, features, proposals):
+    def _forward_box(self, features, proposals,contrastive=None, pool28x28=False):
         """
         Forward logic of the box prediction branch. If `self.train_on_pred_boxes is True`,
             the function puts predicted boxes in the `proposal_boxes` field of `proposals` argument.
@@ -619,7 +674,44 @@ class StandardROIHeads(ROIHeads):
             In training, a dict of losses.
             In inference, a list of `Instances`, the predicted instances.
         """
-        box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
+        if contrastive is not None:
+            box_features28 = self.box_pooler28x28(features, [x.proposal_boxes for x in proposals])
+            mask_logits = torch.sigmoid(contrastive[0][contrastive[1], contrastive[2]])
+            #import pdb; pdb.set_trace()
+            box_features28 *= mask_logits[:, None, :, :]
+            box_features = torch.nn.functional.avg_pool2d(box_features28, kernel_size=4, stride=4)
+        elif self.finetune28x28 and pool28x28:
+            box_features28 = self.box_pooler28x28(features, [x.proposal_boxes for x in proposals])
+            if 'pred_masks' in proposals[0].get_fields().keys():
+                pred_masks = torch.cat([p.get('pred_masks') for p in proposals],dim=0)
+
+                ''' start visualization of feature masking'''
+                # import matplotlib.pyplot as plt
+                # #import pdb; pdb.set_trace()
+                # fig, axes = plt.subplots(nrows=1, ncols=3)
+                # im = axes.flat[0].imshow(pred_masks[0][0].cpu().detach(), vmin=0, vmax=1)
+                # im = axes.flat[1].imshow(box_features28[0][0].cpu().detach(), vmin=0, vmax=1)
+                # box_features28 = box_features28 * pred_masks
+                # im = axes.flat[2].imshow(box_features28[0][0].cpu().detach(), vmin=0, vmax=1)
+                # fig.subplots_adjust(right=0.8)
+                # cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
+                # fig.colorbar(im, cax=cbar_ax)
+                # plt.show()
+                ''' end visualization'''
+                box_features28 = box_features28 * pred_masks
+        elif self.evaluate_masking:
+            box_features28 = self.box_pooler28x28(features, [x.proposal_boxes for x in proposals])
+            if 'pred_masks' in proposals[0].get_fields().keys():
+                    pred_masks = torch.cat([p.get('pred_masks') for p in proposals], dim=0)
+                    box_features28 = box_features28 * pred_masks
+
+            else:
+                box_features28 = torch.nn.functional.dropout2d(box_features28,p=0.5,training=self.training)
+            box_features = torch.nn.functional.avg_pool2d(box_features28, kernel_size=4, stride=4)
+
+        else:
+            box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
+
         box_features = self.box_head(box_features)
         pred_class_logits, pred_proposal_deltas = self.box_predictor(box_features)
         del box_features
@@ -631,18 +723,38 @@ class StandardROIHeads(ROIHeads):
             proposals,
             self.smooth_l1_beta,
         )
+        #import pdb;
+        #pdb.set_trace()
+        num_classes = pred_class_logits.shape[1]
+        pred_class_logits = pred_class_logits.split(outputs.num_preds_per_image, dim=0)
+        for proposal,pred_class in zip(proposals,pred_class_logits):
+            proposal.set('pred_class_logits',pred_class)
+
+
+
+        if self.cfg.MODEL.TRANSFER_FUNCTION:
+            #import pdb; pdb.set_trace()
+            weight_box = self.box_predictor.bbox_pred.weight.data.view(num_classes-1, -1) # except Background class
+            weight_cls = self.box_predictor.cls_score.weight.data[:num_classes-1] # except background class
+            weight_det = torch.cat([weight_cls, weight_box], dim=1) # W_det in the paper
+            self.mask_head.mask_weights = self.transfer_function(weight_det.detach())  # stop gradient (as proposed in the paper)
+            del weight_det
+
+
+
         if self.training:
             if self.train_on_pred_boxes:
                 with torch.no_grad():
                     pred_boxes = outputs.predict_boxes_for_gt_classes()
                     for proposals_per_image, pred_boxes_per_image in zip(proposals, pred_boxes):
                         proposals_per_image.proposal_boxes = Boxes(pred_boxes_per_image)
+
             return outputs.losses()
         else:
             pred_instances, _ = outputs.inference(
                 self.test_score_thresh, self.test_nms_thresh, self.test_detections_per_img
             )
-            return pred_instances
+            return pred_instances, _
 
     def _forward_mask(self, features, instances):
         """
@@ -665,13 +777,38 @@ class StandardROIHeads(ROIHeads):
             # The loss is only defined on positive proposals.
             proposals, _ = select_foreground_proposals(instances, self.num_classes)
             proposal_boxes = [x.proposal_boxes for x in proposals]
+            #import pdb;pdb.set_trace()
             mask_features = self.mask_pooler(features, proposal_boxes)
             mask_logits = self.mask_head(mask_features)
-            return {"loss_mask": mask_rcnn_loss(mask_logits, proposals)}
+            if self.contrastive or self.finetune28x28:
+                loss_mask, (positive_inds, labels_pos, mask_targets) = mask_rcnn_loss(mask_logits, proposals,contrastive=True)
+
+                # Select masks corresponding to the predicted classes
+                #import pdb; pdb.set_trace()
+                num_masks = mask_logits.shape[0]
+                mask_logits = mask_logits.sigmoid()
+                # mask_probs_pred.shape: (B, 80, Hmask, Wmask)
+
+                num_boxes_per_image = [len(i) for i in proposals]
+                loss_filled = mask_logits.mean()
+                mask_logits = mask_logits.split(num_boxes_per_image, dim=0)
+
+                for prob, proposal in zip(mask_logits, proposals):
+                    proposal.pred_masks = prob  # (1, Hmask, Wmask)
+
+
+                return {"loss_mask": loss_mask, "loss_filled":loss_filled}, (proposals, mask_logits, positive_inds, labels_pos, mask_targets)
+            else:
+                return {"loss_mask": mask_rcnn_loss(mask_logits, proposals,contrastive=False)}
         else:
             pred_boxes = [x.pred_boxes for x in instances]
             mask_features = self.mask_pooler(features, pred_boxes)
             mask_logits = self.mask_head(mask_features)
+            # if self.contrastive:
+            #     instances, positive_inds, label_pos = mask_rcnn_inference_contrastive(mask_logits, instances)
+            #     return instances, mask_logits, positive_inds, label_pos
+
+            # else:
             mask_rcnn_inference(mask_logits, instances)
             return instances
 
@@ -721,3 +858,60 @@ class StandardROIHeads(ROIHeads):
             keypoint_logits = self.keypoint_head(keypoint_features)
             keypoint_rcnn_inference(keypoint_logits, instances)
             return instances
+
+
+
+    def _forward_contrastive(self, features, proposals):
+        """
+        Forward logic of the box prediction branch. If `self.train_on_pred_boxes is True`,
+            the function puts predicted boxes in the `proposal_boxes` field of `proposals` argument.
+
+        Args:
+            features (list[Tensor]): #level input features for box prediction
+            proposals (list[Instances]): the per-image object proposals with
+                their matching ground truth.
+                Each has fields "proposal_boxes", and "objectness_logits",
+                "gt_classes", "gt_boxes".
+
+        Returns:
+            In training, a dict of losses.kkk
+            In inference, a list of `Instances`, the predicted instances.
+        """
+
+        pred_class_logits = torch.cat([p.pred_class_logits for p in proposals], dim=0)
+        pred_masks = torch.cat([p.pred_masks for p in proposals], dim=0)
+        gt_classes = torch.cat([p.gt_classes for p in proposals], dim=0)
+        gt_masks = [proposal.gt_masks.crop_and_resize(proposal.proposal_boxes.tensor, 28).to(device=pred_masks.device) for proposal in proposals]
+        gt_masks = torch.cat(gt_masks,dim=0)
+        indices = torch.arange(pred_masks.shape[0], device=pred_masks.device)
+        pred_classes = pred_class_logits.argmax(dim=1)
+        pred_class_logits[indices,gt_classes] = -float("Inf")
+        background_label = pred_class_logits.shape[1]-1
+        pred_class_logits[indices, background_label] = -float("Inf")
+        masks_with_gt_class = pred_masks[indices,gt_classes][:,None,:,:]
+        wrong_classes = pred_class_logits.argmax(dim=1)
+
+        masks_with_wrong_class = pred_masks[indices,wrong_classes][:,None,:,:]
+
+        masks_combined = torch.cat([torch.ones(masks_with_gt_class.shape).to(pred_masks.device),
+                                    masks_with_gt_class,
+                                    masks_with_wrong_class],dim=0)
+
+
+        box_features28 = self.box_pooler28x28(features, [x.proposal_boxes for x in proposals])
+        box_features28_combined = torch.cat([box_features28, box_features28,box_features28], dim=0)
+        box_features28_combined *= masks_combined
+        box_features_combined = torch.nn.functional.avg_pool2d(box_features28_combined, kernel_size=4, stride=4)
+        box_features_combined = self.box_head(box_features_combined)
+        pred_class_logits_combined, _ = self.box_predictor(box_features_combined)
+        box_features_combined = torch.nn.functional.normalize(box_features_combined,p=2,dim=1)
+        positive, anchor, negative = torch.split(box_features_combined,box_features28.shape[0],dim=0)
+        loss_triplet = torch.nn.functional.triplet_margin_loss(anchor, positive, negative,
+                                                       margin=.2, p=2,
+                                                       eps=1e-6, swap=False, reduction='mean')
+        pred_class_logits_pos, pred_class_logits_anchor, pred_class_logits_neg = torch.split(pred_class_logits_combined,
+                                                                                             box_features28.shape[0], dim=0)
+        loss_cls_after_masking = torch.nn.functional.cross_entropy(pred_class_logits_anchor,gt_classes)
+        #import pdb; pdb.set_trace()
+
+        return {"loss_triplet":loss_triplet, "loss_cls_after_masking":loss_cls_after_masking}

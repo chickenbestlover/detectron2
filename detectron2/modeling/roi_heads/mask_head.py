@@ -17,7 +17,7 @@ The registered object will be called with `obj(cfg, input_shape)`.
 """
 
 
-def mask_rcnn_loss(pred_mask_logits, instances):
+def mask_rcnn_loss(pred_mask_logits, instances,contrastive=False):
     """
     Compute the mask prediction loss defined in the Mask R-CNN paper.
 
@@ -89,7 +89,10 @@ def mask_rcnn_loss(pred_mask_logits, instances):
     mask_loss = F.binary_cross_entropy_with_logits(
         pred_mask_logits, gt_masks.to(dtype=torch.float32), reduction="mean"
     )
-    return mask_loss
+    if contrastive:
+        return mask_loss, (indices,gt_classes,gt_masks)
+    else:
+        return mask_loss
 
 
 def mask_rcnn_inference(pred_mask_logits, pred_instances):
@@ -132,6 +135,47 @@ def mask_rcnn_inference(pred_mask_logits, pred_instances):
     for prob, instances in zip(mask_probs_pred, pred_instances):
         instances.pred_masks = prob  # (1, Hmask, Wmask)
 
+def mask_rcnn_inference_contrastive(pred_mask_logits, pred_instances):
+    """
+    Convert pred_mask_logits to estimated foreground probability masks while also
+    extracting only the masks for the predicted classes in pred_instances. For each
+    predicted box, the mask of the same class is attached to the instance by adding a
+    new "pred_masks" field to pred_instances.
+
+    Args:
+        pred_mask_logits (Tensor): A tensor of shape (B, C, Hmask, Wmask) or (B, 1, Hmask, Wmask)
+            for class-specific or class-agnostic, where B is the total number of predicted masks
+            in all images, C is the number of foreground classes, and Hmask, Wmask are the height
+            and width of the mask predictions. The values are logits.
+        pred_instances (list[Instances]): A list of N Instances, where N is the number of images
+            in the batch. Each Instances must have field "pred_classes".
+
+    Returns:
+        None. pred_instances will contain an extra "pred_masks" field storing a mask of size (Hmask,
+            Wmask) for predicted class. Note that the masks are returned as a soft (non-quantized)
+            masks the resolution predicted by the network; post-processing steps, such as resizing
+            the predicted masks to the original image resolution and/or binarizing them, is left
+            to the caller.
+    """
+    cls_agnostic_mask = pred_mask_logits.size(1) == 1
+
+    if cls_agnostic_mask:
+        mask_probs_pred = pred_mask_logits.sigmoid()
+    else:
+        # Select masks corresponding to the predicted classes
+        num_masks = pred_mask_logits.shape[0]
+        class_pred = cat([i.pred_classes for i in pred_instances])
+        indices = torch.arange(num_masks, device=class_pred.device)
+        mask_probs_pred = pred_mask_logits[indices, class_pred][:, None].sigmoid()
+    # mask_probs_pred.shape: (B, 1, Hmask, Wmask)
+
+    num_boxes_per_image = [len(i) for i in pred_instances]
+    mask_probs_pred = mask_probs_pred.split(num_boxes_per_image, dim=0)
+
+    for prob, instances in zip(mask_probs_pred, pred_instances):
+        instances.pred_masks = prob  # (1, Hmask, Wmask)
+
+    return pred_instances, indices, class_pred
 
 @ROI_MASK_HEAD_REGISTRY.register()
 class MaskRCNNConvUpsampleHead(nn.Module):
@@ -172,7 +216,7 @@ class MaskRCNNConvUpsampleHead(nn.Module):
             )
             self.add_module("mask_fcn{}".format(k + 1), conv)
             self.conv_norm_relus.append(conv)
-
+        self.cfg = cfg
         self.deconv = ConvTranspose2d(
             conv_dims if num_conv > 0 else input_channels,
             conv_dims,
@@ -180,22 +224,50 @@ class MaskRCNNConvUpsampleHead(nn.Module):
             stride=2,
             padding=0,
         )
+        if self.cfg.MODEL.TRANSFER_FUNCTION:
+            self.in_feat_dim = 256 * (self.cfg.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION * 2) * (self.cfg.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION * 2)
+            self.out_feat_dim = (self.cfg.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION * 2) * (self.cfg.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION * 2)
+            self.MLP = nn.Sequential(
+                nn.Linear(self.in_feat_dim,1024),
+                nn.LeakyReLU(inplace=True),
+                nn.Linear(1024, self.out_feat_dim),
+            )
 
-        num_mask_classes = 1 if cls_agnostic_mask else num_classes
-        self.predictor = Conv2d(conv_dims, num_mask_classes, kernel_size=1, stride=1, padding=0)
+        else:
+            self.mask_weights = None
+            num_mask_classes = 1 if cls_agnostic_mask else num_classes
+            self.predictor = Conv2d(conv_dims, num_mask_classes, kernel_size=1, stride=1, padding=0)
+            # use normal distribution initialization for mask prediction layer
+            nn.init.normal_(self.predictor.weight, std=0.001)
+            if self.predictor.bias is not None:
+                nn.init.constant_(self.predictor.bias, 0)
 
         for layer in self.conv_norm_relus + [self.deconv]:
             weight_init.c2_msra_fill(layer)
-        # use normal distribution initialization for mask prediction layer
-        nn.init.normal_(self.predictor.weight, std=0.001)
-        if self.predictor.bias is not None:
-            nn.init.constant_(self.predictor.bias, 0)
+
 
     def forward(self, x):
         for layer in self.conv_norm_relus:
             x = layer(x)
         x = F.relu(self.deconv(x))
-        return self.predictor(x)
+
+        if self.cfg.MODEL.TRANSFER_FUNCTION and self.mask_weights is not None:
+            #import pdb; pdb.set_trace()
+            B,C,W,H = x.shape
+            mlp_x = self.MLP(x.view(B, C*W*H))  # mlp_x: (#object,28*28)
+            mlp_x = mlp_x.view(-1, 1, (self.cfg.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION * 2), (self.cfg.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION * 2))  # mlp_x: (#object,1,28,28)
+            # 1by1 conv im
+            x = x.permute(0, 2, 3, 1)  # x: (#object, 28,28,256)
+            x = torch.matmul(x.contiguous().view(-1, C), self.mask_weights.transpose(0,1))
+            x = x.view(B, W, H, self.mask_weights.shape[0])
+            x = x.permute(0, 3, 1, 2)
+
+            logits = x + mlp_x
+
+            return logits  # logits: (#object,81,28,28)
+
+        else:
+            return self.predictor(x)
 
 
 def build_mask_head(cfg, input_shape):
@@ -204,3 +276,20 @@ def build_mask_head(cfg, input_shape):
     """
     name = cfg.MODEL.ROI_MASK_HEAD.NAME
     return ROI_MASK_HEAD_REGISTRY.get(name)(cfg, input_shape)
+
+
+def prepare_gt_masks(instances, device):
+    gt_masks = []
+    for instances_per_image in instances:
+        if len(instances_per_image) == 0: raise NotImplementedError
+        gt_masks_per_image = instances_per_image.gt_masks.crop_and_resize(
+            instances_per_image.proposal_boxes.tensor, 28
+        ).to(device=device)
+        # A tensor of shape (N, M, M), N=#instances in the image; M=mask_side_len
+        gt_masks.append(gt_masks_per_image)
+
+    if len(gt_masks) == 0: raise NotImplementedError
+
+    gt_masks = cat(gt_masks, dim=0)
+
+    return gt_masks

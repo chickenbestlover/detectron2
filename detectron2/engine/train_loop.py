@@ -9,6 +9,7 @@ import torch
 
 import detectron2.utils.comm as comm
 from detectron2.utils.events import EventStorage
+from torch.nn.parallel import DistributedDataParallel
 
 __all__ = ["HookBase", "TrainerBase", "SimpleTrainer"]
 
@@ -190,7 +191,6 @@ class SimpleTrainer(TrainerBase):
         like evaluation during training, you can overwrite its train() method.
         """
         model.train()
-
         self.model = model
         self.data_loader = data_loader
         self._data_loader_iter = iter(data_loader)
@@ -212,10 +212,25 @@ class SimpleTrainer(TrainerBase):
         If your want to do something with the losses, you can wrap the model.
         """
         loss_dict = self.model(data)
+        if isinstance(self.model, DistributedDataParallel):
+            cfg = self.model.module.cfg
+        else:
+            cfg = self.model.cfg
+
+        if cfg.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING:
+            loss_dict.pop('loss_cls')
+            loss_dict.pop('loss_box_reg')
+            loss_dict.pop('loss_rpn_cls')
+            loss_dict.pop('loss_rpn_loc')
+        loss_dict_backup = loss_dict.copy()
+        if cfg.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING:
+            loss_dict.pop('loss_filled')
+        #loss_dict.pop('loss_mask')
+        #loss_dict.pop('loss_contrastive')
         losses = sum(loss for loss in loss_dict.values())
         self._detect_anomaly(losses, loss_dict)
 
-        metrics_dict = loss_dict
+        metrics_dict = loss_dict_backup
         metrics_dict["data_time"] = data_time
         self._write_metrics(metrics_dict)
 

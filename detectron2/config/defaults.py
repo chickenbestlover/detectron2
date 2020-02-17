@@ -271,6 +271,14 @@ _C.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.5
 # train ROI heads.
 _C.MODEL.ROI_HEADS.PROPOSAL_APPEND_GT = True
 
+_C.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING = False #jmp
+_C.MODEL.RESET_MASK = False
+_C.MODEL.FREEZE_BACKBONE = False
+_C.MODEL.FREEZE_RPN = False
+_C.MODEL.FREEZE_BOX = False
+_C.MODEL.FINETUNE_28X28= False
+_C.MODEL.EVALUATE_MASKING = False
+_C.MODEL.TRANSFER_FUNCTION = False
 # ---------------------------------------------------------------------------- #
 # Box Head
 # ---------------------------------------------------------------------------- #

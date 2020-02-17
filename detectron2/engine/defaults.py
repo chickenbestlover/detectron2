@@ -275,6 +275,65 @@ class DefaultTrainer(SimpleTrainer):
 
         self.register_hooks(self.build_hooks())
 
+    def re_init_except_model(self, cfg):
+        """
+        Args:
+            cfg (CfgNode):
+        """
+        logger = logging.getLogger("detectron2")
+        if not logger.isEnabledFor(logging.INFO):  # setup_logger is not called for d2
+            setup_logger()
+        # Assume these objects must be constructed in this order.
+        #model = self.build_model(cfg)
+        #import pdb; pdb.set_trace()
+        # if cfg.MODEL.FREEZE_BACKBONE:
+        #     for p in self.model.backbone.parameters(): p.requires_grad = False
+        # if cfg.MODEL.FREEZE_RPN:
+        #     for p in self.model.proposal_generator.parameters(): p.requires_grad = False
+        # if cfg.MODEL.FREEZE_BOX:
+        #     for p in self.model.roi_heads.box_head.parameters(): p.requires_grad = False
+        if isinstance(self.model, DistributedDataParallel):
+            self.model = self.model.module
+
+        if cfg.MODEL.RESET_MASK:
+            self.model.roi_heads._init_mask_head(cfg)  # randomly initialize mask head weights
+            self.model.roi_heads.mask_head.to(self.model.device)
+
+        if cfg.MODEL.FINETUNE_28X28:
+            for p in self.model.parameters(): p.requires_grad = False
+            #for p in self.model.roi_heads.mask_head.parameters(): p.requires_grad = True
+            for p in self.model.roi_heads.box_head.parameters(): p.requires_grad = True
+        elif cfg.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING:
+            for p in self.model.parameters(): p.requires_grad = False
+            # for p in self.model.roi_heads.mask_head.parameters(): p.requires_grad = True
+            for p in self.model.roi_heads.mask_head.parameters(): p.requires_grad = True
+
+        optimizer = self.build_optimizer(cfg, self.model)
+        #data_loader = self.build_train_loader(cfg)
+
+        # For training, wrap with DDP. But don't need this for inference.
+        if comm.get_world_size() > 1:
+            self.model = DistributedDataParallel(
+                self.model, device_ids=[comm.get_local_rank()], broadcast_buffers=False
+            )
+        super().__init__(self.model, self.data_loader, optimizer)
+
+        self.scheduler = self.build_lr_scheduler(cfg, optimizer)
+        # Assume no other objects need to be checkpointed.
+        # We can later make it checkpoint the stateful hooks
+        self.checkpointer = DetectionCheckpointer(
+            # Assume you want to save checkpoints together with logs/statistics
+            self.model,
+            cfg.OUTPUT_DIR,
+            optimizer=optimizer,
+            scheduler=self.scheduler,
+        )
+        self.start_iter = 0
+        self.max_iter = cfg.SOLVER.MAX_ITER
+        self.cfg = cfg
+
+        self.register_hooks(self.build_hooks())
+
     def resume_or_load(self, resume=True):
         """
         If `resume==True`, and last checkpoint exists, resume from it.
