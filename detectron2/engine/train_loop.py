@@ -217,7 +217,7 @@ class SimpleTrainer(TrainerBase):
         else:
             cfg = self.model.cfg
 
-        if cfg.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING:
+        if cfg.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING and cfg.MODEL.FREEZE_EXCEPT_MASKHEAD:
             loss_dict.pop('loss_cls')
             loss_dict.pop('loss_box_reg')
             loss_dict.pop('loss_rpn_cls')

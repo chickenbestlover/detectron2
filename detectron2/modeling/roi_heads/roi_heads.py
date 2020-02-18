@@ -904,14 +904,15 @@ class StandardROIHeads(ROIHeads):
         box_features_combined = torch.nn.functional.avg_pool2d(box_features28_combined, kernel_size=4, stride=4)
         box_features_combined = self.box_head(box_features_combined)
         pred_class_logits_combined, _ = self.box_predictor(box_features_combined)
-        box_features_combined = torch.nn.functional.normalize(box_features_combined,p=2,dim=1)
+        loss_cls_after_masking = torch.nn.functional.cross_entropy(pred_class_logits_combined[:box_features28.shape[0]], gt_classes)
         positive, anchor, negative = torch.split(box_features_combined,box_features28.shape[0],dim=0)
+        box_features_combined = torch.nn.functional.normalize(box_features_combined,p=2,dim=1)
         loss_triplet = torch.nn.functional.triplet_margin_loss(anchor, positive, negative,
                                                        margin=.2, p=2,
                                                        eps=1e-6, swap=False, reduction='mean')
         pred_class_logits_pos, pred_class_logits_anchor, pred_class_logits_neg = torch.split(pred_class_logits_combined,
                                                                                              box_features28.shape[0], dim=0)
-        loss_cls_after_masking = torch.nn.functional.cross_entropy(pred_class_logits_anchor,gt_classes)
+
         #import pdb; pdb.set_trace()
 
         return {"loss_triplet":loss_triplet, "loss_cls_after_masking":loss_cls_after_masking}

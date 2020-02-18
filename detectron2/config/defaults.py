@@ -279,6 +279,7 @@ _C.MODEL.FREEZE_BOX = False
 _C.MODEL.FINETUNE_28X28= False
 _C.MODEL.EVALUATE_MASKING = False
 _C.MODEL.TRANSFER_FUNCTION = False
+_C.MODEL.FREEZE_EXCEPT_MASKHEAD = True
 # ---------------------------------------------------------------------------- #
 # Box Head
 # ---------------------------------------------------------------------------- #

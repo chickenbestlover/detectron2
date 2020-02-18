@@ -303,7 +303,7 @@ class DefaultTrainer(SimpleTrainer):
             for p in self.model.parameters(): p.requires_grad = False
             #for p in self.model.roi_heads.mask_head.parameters(): p.requires_grad = True
             for p in self.model.roi_heads.box_head.parameters(): p.requires_grad = True
-        elif cfg.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING:
+        elif cfg.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING and cfg.MODEL.FREEZE_EXCEPT_MASKHEAD:
             for p in self.model.parameters(): p.requires_grad = False
             # for p in self.model.roi_heads.mask_head.parameters(): p.requires_grad = True
             for p in self.model.roi_heads.mask_head.parameters(): p.requires_grad = True
