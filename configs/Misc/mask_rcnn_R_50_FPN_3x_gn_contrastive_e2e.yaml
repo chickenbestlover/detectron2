@@ -2,6 +2,7 @@ _BASE_: "../Base-RCNN-FPN.yaml"
 MODEL:
   FREEZE_EXCEPT_MASKHEAD: False
   TRANSFER_FUNCTION: False
+  DETACH_BOX: True
   RESET_MASK: True
   WEIGHTS: "catalog://ImageNetPretrained/FAIR/R-50-GN"
   MASK_ON: True

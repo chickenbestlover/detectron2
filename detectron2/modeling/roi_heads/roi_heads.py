@@ -522,6 +522,39 @@ class StandardROIHeads(ROIHeads):
             self.box_head.output_size, self.num_classes, self.cls_agnostic_bbox_reg
         )
 
+    def copy_box_head(self,device):
+        # fmt: off
+        pooler_resolution        = self.cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION
+        #pooler_scales            = tuple(1.0 / self.feature_strides[k] for k in self.in_features)
+        #sampling_ratio           = self.cfg.MODEL.ROI_BOX_HEAD.POOLER_SAMPLING_RATIO
+        #pooler_type              = self.cfg.MODEL.ROI_BOX_HEAD.POOLER_TYPE
+        #self.train_on_pred_boxes = self.cfg.MODEL.ROI_BOX_HEAD.TRAIN_ON_PRED_BOXES
+        # fmt: on
+
+        # If StandardROIHeads is applied on multiple feature maps (as in FPN),
+        # then we share the same predictors and therefore the channel counts must be the same
+        in_channels = [self.feature_channels[f] for f in self.in_features]
+        # Check all channel counts are equal
+        assert len(set(in_channels)) == 1, in_channels
+        in_channels = in_channels[0]
+        # Here we split "box head" and "box predictor", which is mainly due to historical reasons.
+        # They are used together so the "box predictor" layers should be part of the "box head".
+        # New subclasses of ROIHeads do not need "box predictor"s.
+        box_head = build_box_head(
+            self.cfg, ShapeSpec(channels=in_channels, height=pooler_resolution, width=pooler_resolution)
+        ).to(device)
+        box_head.load_state_dict(self.box_head.state_dict())
+
+        box_predictor = FastRCNNOutputLayers(
+            self.box_head.output_size, self.num_classes, self.cls_agnostic_bbox_reg
+        ).to(device)
+        box_predictor.load_state_dict(self.box_predictor.state_dict())
+        return box_head, box_predictor
+
+
+
+
+
     def _init_mask_head(self, cfg):
         # fmt: off
         self.mask_on           = cfg.MODEL.MASK_ON
@@ -902,8 +935,12 @@ class StandardROIHeads(ROIHeads):
         box_features28_combined = torch.cat([box_features28, box_features28,box_features28], dim=0)
         box_features28_combined *= masks_combined
         box_features_combined = torch.nn.functional.avg_pool2d(box_features28_combined, kernel_size=4, stride=4)
-        box_features_combined = self.box_head(box_features_combined)
-        pred_class_logits_combined, _ = self.box_predictor(box_features_combined)
+        if self.cfg.MODEL.DETACH_BOX:
+            box_head, box_predictor= self.copy_box_head(device=box_features_combined.device)
+        else:
+            box_head, box_predictor = self.box_head, self.box_predictor
+        box_features_combined = box_head(box_features_combined)
+        pred_class_logits_combined, _ = box_predictor(box_features_combined)
         box_features_combined = torch.nn.functional.normalize(box_features_combined,p=2,dim=1)
         positive, anchor, negative = torch.split(box_features_combined,box_features28.shape[0],dim=0)
         loss_triplet = torch.nn.functional.triplet_margin_loss(anchor, positive, negative,
