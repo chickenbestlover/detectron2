@@ -650,8 +650,9 @@ class StandardROIHeads(ROIHeads):
 
                 ''' start masking performance test'''
                 proposals = [p[k] for p,k in zip(proposals,keep_ind)]
-                if 'pred_masks' in pred_instances[0].get_fields().keys():
-                    for p1,p2 in zip(proposals,pred_instances): p1.set('pred_masks',p2.get('pred_masks'))
+                if self.cfg.MODEL.MASK_TYPE == 'pred':
+                    if 'pred_masks' in pred_instances[0].get_fields().keys():
+                        for p1,p2 in zip(proposals,pred_instances): p1.set('pred_masks',p2.get('pred_masks'))
                 pred_instances, keep_ind = self._forward_box(features_list, proposals, pool28x28=True)
                 pred_instances = self.forward_with_given_boxes(features, pred_instances)  # add mask
                 ''' end masking performance test'''
@@ -734,18 +735,25 @@ class StandardROIHeads(ROIHeads):
                 # plt.show()
                 ''' end visualization'''
                 box_features28 = box_features28 * pred_masks
-        elif self.evaluate_masking:
+        elif self.evaluate_masking and pool28x28:
             box_features28 = self.box_pooler28x28(features, [x.proposal_boxes for x in proposals])
-            if 'gt_masks' in proposals[0].get_fields().keys():
-                pred_masks = torch.cat([p.get('gt_masks') for p in proposals], dim=0)
+            if self.cfg.MODEL.MASK_TYPE == 'gt':
+                assert 'gt_masks' in proposals[0].get_fields().keys()
+                gt_masks = []
+                for instances_per_image in proposals:
+                    gt_masks_per_image = instances_per_image.gt_masks.crop_and_resize(
+                        instances_per_image.proposal_boxes.tensor, 28
+                    ).to(device=box_features28.device)
+                    # A tensor of shape (N, M, M), N=#instances in the image; M=mask_side_len
+                    gt_masks.append(gt_masks_per_image)
+                gt_masks = torch.cat(gt_masks, dim=0)[:,None,:,:]
+                box_features28 = box_features28 * gt_masks
+            elif self.cfg.MODEL.MASK_TYPE == 'pred':
+                assert 'pred_masks' in proposals[0].get_fields().keys()
+                pred_masks = torch.cat([p.get('pred_masks') for p in proposals], dim=0)
                 box_features28 = box_features28 * pred_masks
-
-            elif 'pred_masks' in proposals[0].get_fields().keys():
-                    pred_masks = torch.cat([p.get('pred_masks') for p in proposals], dim=0)
-                    box_features28 = box_features28 * pred_masks
-
-            else:
-                box_features28 = torch.nn.functional.dropout2d(box_features28,p=0.5,training=self.training)
+            elif self.cfg.MODEL.MASK_TYPE == 'none':
+                pass
             box_features = torch.nn.functional.avg_pool2d(box_features28, kernel_size=4, stride=4)
 
         else:
