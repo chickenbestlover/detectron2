@@ -608,7 +608,7 @@ class StandardROIHeads(ROIHeads):
         See :class:`ROIHeads.forward`.
         """
         del images
-        if self.training:
+        if self.training and self.cfg.MODEL.KEEP_TARGET:
             proposals = self.label_and_sample_proposals(proposals, targets)
         del targets
 
