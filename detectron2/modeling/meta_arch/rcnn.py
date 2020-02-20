@@ -158,16 +158,25 @@ class GeneralizedRCNN(nn.Module):
         assert not self.training
 
         images = self.preprocess_image(batched_inputs)
+        if "instances" in batched_inputs[0] and self.cfg.MODEL.KEEP_TARGET:
+            gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+        elif "targets" in batched_inputs[0] and self.cfg.MODEL.KEEP_TARGET:
+            log_first_n(
+                logging.WARN, "'targets' in the model inputs is now renamed to 'instances'!", n=10
+            )
+            gt_instances = [x["targets"].to(self.device) for x in batched_inputs]
+        else:
+            gt_instances = None
         features = self.backbone(images.tensor)
 
         if detected_instances is None:
             if self.proposal_generator:
-                proposals, _ = self.proposal_generator(images, features, None)
+                proposals, _ = self.proposal_generator(images, features, gt_instances)
             else:
                 assert "proposals" in batched_inputs[0]
                 proposals = [x["proposals"].to(self.device) for x in batched_inputs]
 
-            results, _ = self.roi_heads(images, features, proposals, None)
+            results, _ = self.roi_heads(images, features, proposals, gt_instances)
         else:
             detected_instances = [x.to(self.device) for x in detected_instances]
             results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
