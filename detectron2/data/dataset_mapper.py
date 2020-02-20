@@ -46,6 +46,7 @@ class DatasetMapper:
         self.mask_format    = cfg.INPUT.MASK_FORMAT
         self.keypoint_on    = cfg.MODEL.KEYPOINT_ON
         self.load_proposals = cfg.MODEL.LOAD_PROPOSALS
+        self.keep_target    = cfg.MODEL.KEEP_TARGET
         # fmt: on
         if self.keypoint_on and is_train:
             # Flip only makes sense in training
@@ -106,7 +107,7 @@ class DatasetMapper:
                 dataset_dict, image_shape, transforms, self.min_box_side_len, self.proposal_topk
             )
 
-        if not self.is_train:
+        if not self.is_train and not self.keep_target:
             # USER: Modify this if you want to keep them for some reason.
             dataset_dict.pop("annotations", None)
             dataset_dict.pop("sem_seg_file_name", None)
@@ -115,7 +116,7 @@ class DatasetMapper:
         if "annotations" in dataset_dict:
             # USER: Modify this if you want to keep them for some reason.
             for anno in dataset_dict["annotations"]:
-                if not self.mask_on:
+                if not self.mask_on and not self.keep_target:
                     anno.pop("segmentation", None)
                 if not self.keypoint_on:
                     anno.pop("keypoints", None)
