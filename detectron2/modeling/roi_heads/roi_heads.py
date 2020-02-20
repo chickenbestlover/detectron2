@@ -650,7 +650,8 @@ class StandardROIHeads(ROIHeads):
 
                 ''' start masking performance test'''
                 proposals = [p[k] for p,k in zip(proposals,keep_ind)]
-                for p1,p2 in zip(proposals,pred_instances): p1.set('pred_masks',p2.get('pred_masks'))
+                if 'pred_masks' in pred_instances[0].get_fields().keys():
+                    for p1,p2 in zip(proposals,pred_instances): p1.set('pred_masks',p2.get('pred_masks'))
                 pred_instances, keep_ind = self._forward_box(features_list, proposals, pool28x28=True)
                 pred_instances = self.forward_with_given_boxes(features, pred_instances)  # add mask
                 ''' end masking performance test'''
@@ -735,7 +736,11 @@ class StandardROIHeads(ROIHeads):
                 box_features28 = box_features28 * pred_masks
         elif self.evaluate_masking:
             box_features28 = self.box_pooler28x28(features, [x.proposal_boxes for x in proposals])
-            if 'pred_masks' in proposals[0].get_fields().keys():
+            if 'gt_masks' in proposals[0].get_fields().keys():
+                pred_masks = torch.cat([p.get('gt_masks') for p in proposals], dim=0)
+                box_features28 = box_features28 * pred_masks
+
+            elif 'pred_masks' in proposals[0].get_fields().keys():
                     pred_masks = torch.cat([p.get('pred_masks') for p in proposals], dim=0)
                     box_features28 = box_features28 * pred_masks
 
