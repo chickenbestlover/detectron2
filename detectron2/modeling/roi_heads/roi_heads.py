@@ -271,9 +271,10 @@ class ROIHeads(torch.nn.Module):
             proposals_with_gt.append(proposals_per_image)
 
         # Log the number of fg/bg samples that are selected for training ROI heads
-        storage = get_event_storage()
-        storage.put_scalar("roi_head/num_fg_samples", np.mean(num_fg_samples))
-        storage.put_scalar("roi_head/num_bg_samples", np.mean(num_bg_samples))
+        if not self.cfg.MODEL.KEEP_TARGET:
+            storage = get_event_storage()
+            storage.put_scalar("roi_head/num_fg_samples", np.mean(num_fg_samples))
+            storage.put_scalar("roi_head/num_bg_samples", np.mean(num_bg_samples))
 
         return proposals_with_gt
 
