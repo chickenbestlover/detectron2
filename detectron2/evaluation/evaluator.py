@@ -122,6 +122,11 @@ def inference_on_dataset(model, data_loader, evaluator):
 
             start_compute_time = time.perf_counter()
             try:
+                if 'instances' in inputs[0].keys():
+                    num_instances = [inp  ['instances'].__len__() for inp in inputs]
+                    if 0 in num_instances:
+                        print('No gt data included; continue to next batch')
+                        continue
                 outputs = model(inputs)
             except (AssertionError, RuntimeError) as e:
                 print(e)

@@ -136,6 +136,12 @@ class DatasetMapper:
             if self.crop_gen and instances.has("gt_masks"):
                 instances.gt_boxes = instances.gt_masks.get_bounding_boxes()
             dataset_dict["instances"] = utils.filter_empty_instances(instances)
+            num_instances = dataset_dict['instances'].__len__()
+            if num_instances == 0:
+                print(dataset_dict['file_name'])
+                print(dataset_dict['image_id'])
+
+                print('No gt data included in this sample')
 
         # USER: Remove if you don't do semantic/panoptic segmentation.
         if "sem_seg_file_name" in dataset_dict:

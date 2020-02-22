@@ -160,6 +160,8 @@ class GeneralizedRCNN(nn.Module):
         images = self.preprocess_image(batched_inputs)
         if "instances" in batched_inputs[0] and self.cfg.MODEL.KEEP_TARGET:
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+            if gt_instances[0].__len__() == 0: import pdb; pdb.set_trace()
+            if 'gt_masks' not in gt_instances[0].get_fields().keys(): import pdb; pdb.set_trace()
         elif "targets" in batched_inputs[0] and self.cfg.MODEL.KEEP_TARGET:
             # log_first_n(
             #     logging.WARN, "'targets' in the model inputs is now renamed to 'instances'!", n=10

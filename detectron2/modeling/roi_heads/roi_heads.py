@@ -14,7 +14,7 @@ from ..backbone.resnet import BottleneckBlock, make_stage
 from ..box_regression import Box2BoxTransform
 from ..matcher import Matcher
 from ..poolers import ROIPooler
-from ..proposal_generator.proposal_utils import add_ground_truth_to_proposals
+from ..proposal_generator.proposal_utils import add_ground_truth_to_proposals, left_only_ground_truth_to_proposals
 from ..sampling import subsample_labels
 from .box_head import build_box_head
 from .fast_rcnn import FastRCNNOutputLayers, FastRCNNOutputs
@@ -143,6 +143,7 @@ class ROIHeads(torch.nn.Module):
         self.feature_channels         = {k: v.channels for k, v in input_shape.items()}
         self.cls_agnostic_bbox_reg    = cfg.MODEL.ROI_BOX_HEAD.CLS_AGNOSTIC_BBOX_REG
         self.smooth_l1_beta           = cfg.MODEL.ROI_BOX_HEAD.SMOOTH_L1_BETA
+        self.use_gt_proposal          = cfg.MODEL.USE_GT_PROPOSAL
         # fmt: on
 
         # Matcher to assign box proposals to gt boxes
@@ -228,8 +229,12 @@ class ROIHeads(torch.nn.Module):
         # examples from the start of training. For RPN, this augmentation improves
         # convergence and empirically improves box AP on COCO by about 0.5
         # points (under one tested configuration).
-        if self.proposal_append_gt:
+
+        if self.use_gt_proposal:
+            proposals = left_only_ground_truth_to_proposals(gt_boxes, proposals)
+        elif self.proposal_append_gt:
             proposals = add_ground_truth_to_proposals(gt_boxes, proposals)
+
 
         proposals_with_gt = []
 
@@ -608,11 +613,12 @@ class StandardROIHeads(ROIHeads):
         """
         See :class:`ROIHeads.forward`.
         """
+
         del images
         if self.training or self.cfg.MODEL.KEEP_TARGET:
             proposals = self.label_and_sample_proposals(proposals, targets)
+            #if 'gt_masks' not in proposals[0].get_fields().keys(): import pdb; pdb.set_trace()
         del targets
-
         features_list = [features[f] for f in self.in_features]
 
         if self.training:
@@ -647,7 +653,7 @@ class StandardROIHeads(ROIHeads):
             pred_instances = self.forward_with_given_boxes(features, pred_instances) # add mask
 
             if self.evaluate_masking:
-
+                if 'gt_masks' not in proposals[0].get_fields().keys(): import pdb; pdb.set_trace()
                 ''' start masking performance test'''
                 proposals = [p[k] for p,k in zip(proposals,keep_ind)]
                 if self.cfg.MODEL.MASK_TYPE == 'pred':
@@ -738,7 +744,8 @@ class StandardROIHeads(ROIHeads):
         elif self.evaluate_masking and pool28x28:
             box_features28 = self.box_pooler28x28(features, [x.proposal_boxes for x in proposals])
             if self.cfg.MODEL.MASK_TYPE == 'gt':
-                assert 'gt_masks' in proposals[0].get_fields().keys()
+                if 'gt_masks' not in proposals[0].get_fields().keys(): import pdb; pdb.set_trace()
+
                 gt_masks = []
                 for instances_per_image in proposals:
                     gt_masks_per_image = instances_per_image.gt_masks.crop_and_resize(
@@ -749,7 +756,7 @@ class StandardROIHeads(ROIHeads):
                 gt_masks = torch.cat(gt_masks, dim=0)[:,None,:,:]
                 box_features28 = box_features28 * gt_masks
             elif self.cfg.MODEL.MASK_TYPE == 'pred':
-                assert 'pred_masks' in proposals[0].get_fields().keys()
+                assert 'pred_masks' in proposals[0].get_fields().keys(), 'there is no pred_masks in the instance'
                 pred_masks = torch.cat([p.get('pred_masks') for p in proposals], dim=0)
                 box_features28 = box_features28 * pred_masks
             elif self.cfg.MODEL.MASK_TYPE == 'none':
@@ -770,7 +777,7 @@ class StandardROIHeads(ROIHeads):
             proposals,
             self.smooth_l1_beta,
         )
-        #import pdb;
+        #import pdb;tr
         #pdb.set_trace()
         num_classes = pred_class_logits.shape[1]
         pred_class_logits = pred_class_logits.split(outputs.num_preds_per_image, dim=0)
@@ -958,7 +965,7 @@ class StandardROIHeads(ROIHeads):
         box_features_combined = torch.nn.functional.normalize(box_features_combined,p=2,dim=1)
         positive, anchor, negative = torch.split(box_features_combined,box_features28.shape[0],dim=0)
         loss_triplet = torch.nn.functional.triplet_margin_loss(anchor, positive, negative,
-                                                       margin=.2, p=2,
+                                                       margin=1, p=2,
                                                        eps=1e-6, swap=False, reduction='mean')
         pred_class_logits_pos, pred_class_logits_anchor, pred_class_logits_neg = torch.split(pred_class_logits_combined,
                                                                                              box_features28.shape[0], dim=0)

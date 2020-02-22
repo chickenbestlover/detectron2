@@ -282,7 +282,8 @@ _C.MODEL.MASK_TYPE = 'none' # none, gt, or pred
 _C.MODEL.TRANSFER_FUNCTION = False
 _C.MODEL.FREEZE_EXCEPT_MASKHEAD = True
 _C.MODEL.DETACH_BOX = False
-_C.MODEL.KEEP_TARGET= False
+_C.MODEL.KEEP_TARGET = False
+_C.MODEL.USE_GT_PROPOSAL = False
 # ---------------------------------------------------------------------------- #
 # Box Head
 # ---------------------------------------------------------------------------- #
