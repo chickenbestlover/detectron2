@@ -5,7 +5,6 @@ MODEL:
   PIXEL_STD: [57.375, 57.120, 58.395]
   RESNETS:
     DEPTH: 101
-    #NORM: "GN"
     STRIDE_IN_1X1: False
     NUM_GROUPS: 32
     WIDTH_PER_GROUP: 8
@@ -13,9 +12,7 @@ MODEL:
     NAME: "FastRCNNConvFCHead"
     NUM_CONV: 4
     NUM_FC: 1
-    #NORM: "GN"
-  ROI_MASK_HEAD:
-    #NORM: "GN"
+    NORM: "GN"
 SOLVER:
   # 3x schedule
   IMS_PER_BATCH: 8
