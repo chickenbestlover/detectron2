@@ -487,6 +487,9 @@ class StandardROIHeads(ROIHeads):
                 nn.Linear(1024, 256),
                 nn.LeakyReLU(inplace=True)
             )
+        if cfg.MODEL.DETACH_BOX:
+            self.detached_box_head = None
+            self.detached_box_predictor = None
 
     def _init_box_head(self, cfg):
         # fmt: off
@@ -546,16 +549,16 @@ class StandardROIHeads(ROIHeads):
         # Here we split "box head" and "box predictor", which is mainly due to historical reasons.
         # They are used together so the "box predictor" layers should be part of the "box head".
         # New subclasses of ROIHeads do not need "box predictor"s.
-        box_head = build_box_head(
-            self.cfg, ShapeSpec(channels=in_channels, height=pooler_resolution, width=pooler_resolution)
-        ).to(device)
-        box_head.load_state_dict(self.box_head.state_dict())
+        if self.detached_box_head is None:
+            self.detached_box_head = build_box_head(
+                self.cfg, ShapeSpec(channels=in_channels, height=pooler_resolution, width=pooler_resolution)
+            ).to(device)
+            self.detached_box_predictor = FastRCNNOutputLayers(
+                self.box_head.output_size, self.num_classes, self.cls_agnostic_bbox_reg
+            ).to(device)
+        self.detached_box_head.load_state_dict(self.box_head.state_dict())
+        self.detached_box_predictor.load_state_dict(self.box_predictor.state_dict())
 
-        box_predictor = FastRCNNOutputLayers(
-            self.box_head.output_size, self.num_classes, self.cls_agnostic_bbox_reg
-        ).to(device)
-        box_predictor.load_state_dict(self.box_predictor.state_dict())
-        return box_head, box_predictor
 
 
 
@@ -957,7 +960,8 @@ class StandardROIHeads(ROIHeads):
         box_features28_combined *= masks_combined
         box_features_combined = torch.nn.functional.avg_pool2d(box_features28_combined, kernel_size=4, stride=4)
         if self.cfg.MODEL.DETACH_BOX:
-            box_head, box_predictor= self.copy_box_head(device=box_features_combined.device)
+            self.copy_box_head(device=box_features_combined.device)
+            box_head, box_predictor = self.detached_box_head, self.detached_box_predictor
         else:
             box_head, box_predictor = self.box_head, self.box_predictor
         box_features_combined = box_head(box_features_combined)
