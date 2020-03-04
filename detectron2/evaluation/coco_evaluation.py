@@ -292,8 +292,43 @@ class COCOEvaluator(DatasetEvaluator):
             numalign="left",
         )
         self._logger.info("Per-category {} AP: \n".format(iou_type) + table)
-
         results.update({"AP-" + name: ap for name, ap in results_per_category})
+
+        #############################################################################################
+        def _print_per_category(iou=None, area_range=0):
+            if area_range==0:
+                ious = [50,55,60,65,70,75,80,85,90,95]
+                target = ious[iou]
+            else:
+                iou=range(10)
+                areas = ['a','s','m','l']
+                target = areas[area_range]
+            ''' Print Per-category AP50 '''
+            results_per_category = []
+            for idx, name in enumerate(class_names):
+                # area range index 0: all area ranges
+                # max dets index -1: typically 100 per image
+                precision = precisions[iou, :, idx, area_range, -1]
+                precision = precision[precision > -1]
+                ap = np.mean(precision) if precision.size else float("nan")
+                results_per_category.append(("{}".format(name), float(ap * 100)))
+
+            # tabulate it
+            N_COLS = min(6, len(results_per_category) * 2)
+            results_flatten = list(itertools.chain(*results_per_category))
+            results_2d = itertools.zip_longest(*[results_flatten[i::N_COLS] for i in range(N_COLS)])
+            table = tabulate(
+                results_2d,
+                tablefmt="pipe",
+                floatfmt=".3f",
+                headers=["category", "AP"] * (N_COLS // 2),
+                numalign="left",
+            )
+            self._logger.info("Per-category {} AP{}: \n".format(iou_type,str(target)) + table)
+
+        for iou in [0,5]: _print_per_category(iou=iou,area_range=0)
+        for area in [1,2,3]: _print_per_category(iou=None,area_range=area)
+
         return results
 
 
