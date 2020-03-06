@@ -225,7 +225,7 @@ class SimpleTrainer(TrainerBase):
         loss_dict_backup = loss_dict.copy()
         if cfg.MODEL.ROI_HEADS.CONTRASTIVE_LEARNING:
             loss_dict.pop('loss_filled')
-        #loss_dict.pop('loss_mask')
+            loss_dict.pop('loss_mask')
         #loss_dict.pop('loss_contrastive')
         losses = sum(loss for loss in loss_dict.values())
         self._detect_anomaly(losses, loss_dict)
