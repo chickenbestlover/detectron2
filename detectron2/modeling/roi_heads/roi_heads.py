@@ -971,9 +971,10 @@ class StandardROIHeads(ROIHeads):
         loss_triplet = torch.nn.functional.triplet_margin_loss(anchor, positive, negative.detach(),
                                                        margin=1, p=2,
                                                        eps=1e-6, swap=False, reduction='mean')
-        pred_class_logits_pos, pred_class_logits_anchor, pred_class_logits_neg = torch.split(pred_class_logits_combined,
-                                                                                             box_features28.shape[0], dim=0)
-        loss_cls_after_masking = torch.nn.functional.cross_entropy(pred_class_logits_anchor,gt_classes)
+        #pred_class_logits_pos, pred_class_logits_anchor, pred_class_logits_neg = torch.split(pred_class_logits_combined,
+        #                                                                                     box_features28.shape[0], dim=0)
+        #loss_cls_after_masking = torch.nn.functional.cross_entropy(pred_class_logits_anchor,gt_classes)
         #import pdb; pdb.set_trace()
 
-        return {"loss_triplet":loss_triplet, "loss_cls_after_masking":loss_cls_after_masking}
+        #return {"loss_triplet":loss_triplet, "loss_cls_after_masking":loss_cls_after_masking}
+        return {"loss_triplet": loss_triplet}
