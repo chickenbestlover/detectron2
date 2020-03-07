@@ -20,7 +20,7 @@ from .box_head import build_box_head
 from .fast_rcnn import FastRCNNOutputLayers, FastRCNNOutputs
 from .keypoint_head import build_keypoint_head, keypoint_rcnn_inference, keypoint_rcnn_loss
 from .mask_head import build_mask_head, mask_rcnn_inference, mask_rcnn_loss, mask_rcnn_inference_contrastive, prepare_gt_masks
-
+import random
 ROI_HEADS_REGISTRY = Registry("ROI_HEADS")
 ROI_HEADS_REGISTRY.__doc__ = """
 Registry for ROI heads in a generalized R-CNN model.
@@ -947,7 +947,7 @@ class StandardROIHeads(ROIHeads):
         pred_class_logits[indices, background_label] = -float("Inf")
         masks_with_gt_class = pred_masks[indices,gt_classes][:,None,:,:]
         wrong_classes = pred_class_logits.argmax(dim=1)
-
+        wrong_classes = random.randint(0,background_label-1)
         masks_with_wrong_class = pred_masks[indices,wrong_classes][:,None,:,:]
 
         masks_combined = torch.cat([torch.ones(masks_with_gt_class.shape).to(pred_masks.device),
