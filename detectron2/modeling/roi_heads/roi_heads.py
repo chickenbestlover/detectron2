@@ -968,7 +968,7 @@ class StandardROIHeads(ROIHeads):
         pred_class_logits_combined, _ = box_predictor(box_features_combined)
         box_features_combined = torch.nn.functional.normalize(box_features_combined,p=2,dim=1)
         positive, anchor, negative = torch.split(box_features_combined,box_features28.shape[0],dim=0)
-        loss_triplet = torch.nn.functional.triplet_margin_loss(anchor, positive, negative.detach(),
+        loss_triplet = torch.nn.functional.triplet_margin_loss(anchor, positive, negative,
                                                        margin=1, p=2,
                                                        eps=1e-6, swap=False, reduction='mean')
         #pred_class_logits_pos, pred_class_logits_anchor, pred_class_logits_neg = torch.split(pred_class_logits_combined,
